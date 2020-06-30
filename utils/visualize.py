@@ -80,9 +80,14 @@ def plot_augmented_pairs(datagen, pairs):
     #     data_gen_args=data_gen_args,
     # )
 
-if __name__ == '__main__':
-    loaded = np.load('image_pairs.npz')
-    pairs, y = loaded['pairs'], loaded['y']
-    idxs = np.random.choice(np.arange(len(y)), 6, replace=False)
-    visualize_pairs(pairs[idxs, ...], y[idxs, ...])
+
+def visualize(original, augmented):
+    _ = plt.figure()
+    plt.subplot(1, 2, 1)
+    plt.title('Original image')
+    plt.imshow(original)
+    plt.subplot(1, 2, 2)
+    plt.title('Augmented image')
+    plt.imshow(augmented)
+    plt.show()
 
