@@ -1,0 +1,3 @@
+[submodule "utils/keras_tuner_hiplot"]
+	path = utils/keras_tuner_hiplot
+	url = https://github.com/vitalwarley/keras-tuner-hiplot
