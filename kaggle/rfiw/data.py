@@ -2,8 +2,9 @@
 Load data.
 """
 import os
-from itertools import product, combinations
+import logging
 from pathlib import Path
+from itertools import combinations
 from collections import defaultdict
 
 import numpy as np
@@ -16,8 +17,13 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 
-def load(n_classes=0, samples_per_class=0, gap=5, input_shape=(64, 64, 3),
-         s='train', return_np=True, build_if_exists=False):
+def load(n_classes=0,
+         samples_per_class=0,
+         gap=5,
+         input_shape=(64, 64, 3),
+         s='train',
+         return_np=True,
+         build_if_exists=False):
     """Returns an array of pairs and labels or a train and validation dataset.
     """
     data = 'data'
@@ -39,7 +45,9 @@ def load(n_classes=0, samples_per_class=0, gap=5, input_shape=(64, 64, 3),
                       key=lambda x: len(n_individuals_families[x]),
                       reverse=True)
         # Select most populated families
-        families = fams[:n_classes]
+        families = [n_individuals_families[key] for key in fams]
+        families = [fam for sublist in families for fam in sublist]
+        families = families[:n_classes]
     else:
         # list(families with n_individuals in range(...))
         for n_ind in range(samples_per_class - gap, samples_per_class + gap):
@@ -47,11 +55,12 @@ def load(n_classes=0, samples_per_class=0, gap=5, input_shape=(64, 64, 3),
                 families.append(n_individuals_families[n_ind])
         # Select a few
         if len(families) >= n_classes:
-            families = np.random.choice(families, size=n_classes,
+            families = np.random.choice(families,
+                                        size=n_classes,
                                         replace=False)
         # Not enough families,
         #  then add more families:
-        #   start from those with the least/similar number of individuals
+        #   start from those with the similar number of individuals
         else:
             # list(n_individuals...) <- families with more n_individuals)
             #  in decreasing order
@@ -59,36 +68,34 @@ def load(n_classes=0, samples_per_class=0, gap=5, input_shape=(64, 64, 3),
                           key=lambda x: len(n_individuals_families[x]),
                           reverse=True)
             # pivot similar families index (wrt to n_individuals_families)
-            # pivot = np.argmin(np.abs(
-            #     np.array(fams.keys()) - samples_per_class))
-            fidx = 0
-            # While we don't have enough families
-            while len(families) < n_classes or fidx == len(fams):
+            while len(families) < n_classes or not fams:
+                # Index of most similar fams (in terms of n_individuals)
+                pivot = np.argmin(
+                    np.abs(np.array(fams.keys()) - samples_per_class))
+                key = fams.pop(pivot)
+                # Most similar fams
+                fams_to_add = n_individuals_families[key]
+                # Add what is needed
                 need = n_classes - len(families)
-                fid = fams[fidx]
-                # Add those who aren't there
-                if fid not in families:
-                    fams_to_add = n_individuals_families[fid]
-                    can_add = len(fams_to_add)
-                    will_add = need if need <= can_add else can_add
-                    fams_to_add = np.random.choice(fams_to_add,
-                                                   size=will_add)
-                    families.append(fams_to_add)
-                fidx += 1
+                can_add = len(fams_to_add)
+                will_add = need if need <= can_add else can_add
+                fams_to_add = np.random.choice(fams_to_add, size=will_add)
+                families.append(fams_to_add)
 
     # FIDX|FIDY|FIDZ|...
     fams = '|'.join(families)
 
     # Only those pairs within `families`
-    relations = relations[
-        relations.p1.str.contains(fams) & relations.p2.str.contains(fams)]
+    relations = relations[relations.p1.str.contains(fams)
+                          & relations.p2.str.contains(fams)]
 
     if os.path.exists('pairs.csv') and not build_if_exists:
         pairs = pd.read_csv('pairs.csv')
     else:
-        print('Building pairs relation...')
+        logging.info('Building pairs relation...')
         try:
-            pairs = build_pairs_relation(folder, relations,
+            pairs = build_pairs_relation(folder,
+                                         relations,
                                          from_families=families)
         except (RuntimeError, ValueError, KeyError):
             # Couldn't build it
@@ -99,20 +106,32 @@ def load(n_classes=0, samples_per_class=0, gap=5, input_shape=(64, 64, 3),
         loaded = np.load('image_pairs.npz')
         pairs, y = loaded['pairs'], loaded['y']
     else:
-        print('Building pairs image path...')
+        logging.info('Building pairs image path...')
         pairs = build_pairs_path(folder, pairs)
         pairs.to_csv('pairs_path.csv', index=False)
-        print('Loading pairs images...')
+        logging.info('Loading pairs images...')
         pairs, y = load_imgs(pairs, target_size=input_shape)
         np.savez_compressed('image_pairs', pairs=pairs, y=y)
 
-    families_added = len(families)
-    mean_n_individuals_per_fam = np.mean(
-        [len(os.listdir(f"{folder}/{fam}")) for fam in families])
-    info = (families_added, mean_n_individuals_per_fam)
+    # Build info
+    n_families = len(families)
+    n_individuals_per_family = [
+        len(os.listdir(f"{folder}/{fam}")) for fam in families
+    ]
+    samples_per_class = np.mean(n_individuals_per_family)
+    n_individuals = sum(n_individuals_per_family)
+    info = dict(n_families=n_families,
+                n_individuals=n_individuals,
+                samples_per_class=samples_per_class)
+
+    logging.info(
+        "%s individuals selected for %s families. "
+        "~%s samples per class.", n_individuals, n_families,
+        round(samples_per_class, 2))
 
     if return_np:
-        x_train, x_test, y_train, y_test = train_test_split(pairs, y,
+        x_train, x_test, y_train, y_test = train_test_split(pairs,
+                                                            y,
                                                             test_size=0.2)
         return ((x_train, y_train), (x_test, y_test)), info
 
@@ -153,8 +172,9 @@ def build_pairs_relation(train_folder, relations, from_families):
 
     # Filter same family pairs (some are negative, some are positive)
     # Positive pairs are in `relations`; we don't need the negatives there (?)
-    nequal_fams = (possible_pairs.p1.str.split('/', expand=True)[0]  # get fid
-                   != possible_pairs.p2.str.split('/', expand=True)[0])
+    nequal_fams = (
+        possible_pairs.p1.str.split('/', expand=True)[0]  # get fid
+        != possible_pairs.p2.str.split('/', expand=True)[0])
     negative_pairs = possible_pairs[nequal_fams]
 
     # Filter negatives to balance dataset
@@ -169,6 +189,8 @@ def build_pairs_relation(train_folder, relations, from_families):
     negative_pairs['target'] = 0
     relations['target'] = 1
     pairs = relations.append(negative_pairs, ignore_index=True)
+
+    logging.info('%s pairs selected.', pairs.shape[0])
 
     return pairs
 
@@ -200,13 +222,14 @@ def build_pairs_path(train_folder, pairs):
             selected = np.random.choice(path_imgs, size=1)[0]
         return selected
 
-    for _, row in tqdm(pairs.iterrows()):
+    for _, row in tqdm(pairs.iterrows(), total=pairs.shape[0]):
         mid1_img_path = sample_img(train_folder, row.p1)
         mid2_img_path = sample_img(train_folder, row.p2)
         if mid1_img_path and mid2_img_path:
-            pairs_path.append(dict(p1=str(mid1_img_path),
-                                   p2=str(mid2_img_path),
-                                   target=str(row.target)))
+            pairs_path.append(
+                dict(p1=str(mid1_img_path),
+                     p2=str(mid2_img_path),
+                     target=str(row.target)))
 
     pairs_path = pd.DataFrame(pairs_path, columns=['p1', 'p2', 'target'])
 
@@ -238,24 +261,24 @@ def generate(x, y, batch_size):
     for batch_idx in range(n_batches):
         batch_start = batch_idx * batch_size
         batch_end = (1 + batch_idx) * batch_size
-        x_batch = [x[batch_start:batch_end, 0, ...],
-                   x[batch_start:batch_end, 1, ...]]
+        x_batch = [
+            x[batch_start:batch_end, 0, ...], x[batch_start:batch_end, 1, ...]
+        ]
         y_batch = y[batch_start:batch_end]
         yield x_batch, y_batch
 
 
 def build_datasets(pairs, y):
     """Return a `tf.data.Dataset` for training and validation."""
-    x_train, x_val, y_train, y_val = train_test_split(pairs, y,
+    x_train, x_val, y_train, y_val = train_test_split(pairs,
+                                                      y,
                                                       test_size=0.2,
                                                       random_state=42)
 
     train_dataset = tf.data.Dataset.from_tensor_slices(
-        ((x_train[:, 0, ...], x_train[:, 1, ...]), y_train)
-    )
+        ((x_train[:, 0, ...], x_train[:, 1, ...]), y_train))
     val_dataset = tf.data.Dataset.from_tensor_slices(
-        ((x_val[:, 0, ...], x_val[:, 1, ...]), y_val)
-    )
+        ((x_val[:, 0, ...], x_val[:, 1, ...]), y_val))
 
     # repetitions = 1
     # train_dataset = (
@@ -271,6 +294,7 @@ def build_datasets(pairs, y):
 def convert(pair, label):
     def _cvt(image):
         return tf.image.convert_image_dtype(image, tf.float32)
+
     image1, image2, = pair
     return (_cvt(image1), _cvt(image2)), label
 
@@ -282,18 +306,19 @@ def augment(pair, label):
         image = tf.image.random_brightness(image, max_delta=0.5)
         image = tf.image.resize(image, size=[64, 64])
         return image
+
     pair, label = convert(pair, label)
     image1, image2, = pair
     return (augment_(image1), augment_(image2)), label
 
 
 def make_pair_input(
-        pairs_path,
-        cols,
-        input_shape,
-        batch_size,
-        seed=None,
-        data_gen_args=None,
+    pairs_path,
+    cols,
+    input_shape,
+    batch_size,
+    seed=None,
+    data_gen_args=None,
 ):
     target_size = (input_shape[0], input_shape[1])
     seed = 42 if seed is None else seed
@@ -327,20 +352,16 @@ def make_pair_input(
 
     flow_fd_args_val = flow_fd_args_train.copy()
 
-    gen_p1_train = datagen_p1.flow_from_dataframe(
-        **flow_fd_args_train)
+    gen_p1_train = datagen_p1.flow_from_dataframe(**flow_fd_args_train)
 
     flow_fd_args_train['x_col'] = cols[1]
-    gen_p2_train = datagen_p2.flow_from_dataframe(
-        **flow_fd_args_train)
+    gen_p2_train = datagen_p2.flow_from_dataframe(**flow_fd_args_train)
 
     flow_fd_args_val['subset'] = 'validation'
-    gen_p1_val = datagen_p1.flow_from_dataframe(
-        **flow_fd_args_val)
+    gen_p1_val = datagen_p1.flow_from_dataframe(**flow_fd_args_val)
 
     flow_fd_args_val['x_col'] = cols[1]
-    gen_p2_val = datagen_p2.flow_from_dataframe(
-        **flow_fd_args_val)
+    gen_p2_val = datagen_p2.flow_from_dataframe(**flow_fd_args_val)
 
     train_sequence = PairInputSequence((gen_p1_train, gen_p2_train))
     val_sequence = PairInputSequence((gen_p1_val, gen_p2_val))
@@ -361,4 +382,3 @@ class PairInputSequence(utils.Sequence):
         (p2_batch, y_batch) = self.gen_p2.__getitem__(index)
         batch = ([p1_batch, p2_batch], y_batch)
         return batch
-
