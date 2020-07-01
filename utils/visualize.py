@@ -32,7 +32,9 @@ def imshow(img):
 def visualize_pairs(pairs, y):
 
     n_pairs = len(pairs)
-    _, axarr = plt.subplots(nrows=2, ncols=n_pairs, figsize=(20, 20),
+    _, axarr = plt.subplots(nrows=2,
+                            ncols=n_pairs,
+                            figsize=(20, 20),
                             squeeze=False)
 
     for a in range(n_pairs):
@@ -46,10 +48,38 @@ def visualize_pairs(pairs, y):
     plt.show()
 
 
-
 def visualize_distance_distribution(distances, targets, n_classes):
     for c in range(n_classes):
         sns.kdeplot(distances[targets == c], label=str(c))
+    plt.show()
+
+
+def visualize_distances(results, dataset):
+    ncols = 4
+    nrows = (len(results) // ncols) + 1
+    _, axs = plt.subplots(nrows,
+                          ncols,
+                          figsize=(20, 20),
+                          squeeze=False,
+                          )
+
+    for i, result in enumerate(results):
+        distances, targets, info = result
+        n_samples, n_classes, n_individuals, loss, acc = (
+            info['samples_per_class'], info['n_individuals'],
+            info['n_families'], info['loss'], info['acc'])
+        ax = axs[i // ncols][i % ncols]
+        for c in range(2):
+            sns.kdeplot(distances[targets == c], label=str(c), ax=ax)
+            ax.annotate(f"Families: {n_classes}", xy=(-0.4, 6.5))
+            ax.annotate(f"Individuals: {n_individuals}", xy=(-0.4, 6.0))
+            ax.annotate(f"Samples per class: ~{n_samples}", xy=(-0.4, 5.5))
+            ax.annotate(f"Loss: {loss:.2f}, Acc: {acc:.2f}", xy=(-0.4, 5.0))
+            ax.set_xlim((-0.5, 2))
+            ax.set_ylim((0, 7))
+            ax.set_title(i)
+
+    plt.suptitle(f"{dataset}: siamese net distances")
     plt.show()
 
 
@@ -90,4 +120,3 @@ def visualize(original, augmented):
     plt.title('Augmented image')
     plt.imshow(augmented)
     plt.show()
-
