@@ -23,7 +23,9 @@ def load(n_classes=0,
          input_shape=(64, 64, 3),
          s='train',
          return_np=True,
-         build_if_exists=False):
+         build_if_exists=False,
+         **kwargs):
+    # pylint: disable=unused-argument
     """Returns an array of pairs and labels or a train and validation dataset.
     """
     data = 'data'

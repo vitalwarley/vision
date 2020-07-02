@@ -12,12 +12,14 @@ from tensorflow.keras import optimizers
 from models.losses import contrastive_loss
 from models.metrics import accuracy_for_distance
 from models.siamese import create_siamese_network
+from models.vggface import create_vggface_network
 from toys.mnist import load as load_mnist
 from data import load as load_fiw
 from utils import set_gpu, inspect_distances, visualize_distances
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 logging.getLogger('tensorflow').setLevel(logging.WARNING)
+# TODO: create logger
 logging.basicConfig(format='%(asctime)s:%(levelname)s - %(message)s',
                     level=logging.INFO)
 
@@ -43,8 +45,16 @@ def get_data(dataset_name, **kwargs):
     return ((tr_pairs, tr_y), (te_pairs, te_y)), info
 
 
-def get_model(input_shape):
-    model = create_siamese_network(input_shape)
+def get_model(model_name='siamese', **kwargs):
+
+    if model_name == 'siamese':
+        model = create_siamese_network(**kwargs)
+    elif model_name == 'vggface':
+        model = create_vggface_network(**kwargs)
+    elif model_name == 'facenet':
+        pass
+
+    logging.info('Running with %s...', model_name)
     optimizer = optimizers.Adam()
     model.compile(loss=contrastive_loss,
                   optimizer=optimizer,
@@ -52,21 +62,21 @@ def get_model(input_shape):
     return model
 
 
-def run(output, dataset, input_shape, samples_per_class, **kwargs):
+def run(output, dataset, samples_per_class=10, **kwargs):
     set_gpu()
-    kwargs.update(input_shape=input_shape, samples_per_class=samples_per_class)
-    data, info = get_data(dataset_name=dataset, **kwargs)
+    data, info = get_data(dataset_name=dataset,
+                          samples_per_class=samples_per_class, **kwargs)
     n_samples = (samples_per_class
                  if info is None else info['samples_per_class'])
 
     (tr_pairs, tr_y), (te_pairs, te_y) = data
 
-    model = get_model(input_shape)
+    model = get_model(**kwargs)
     logging.info('Fitting model.')
     model.fit(tr_pairs, tr_y, batch_size=32, epochs=10, verbose=1)
     logging.info('Evaluating model.')
     loss, acc = model.evaluate(te_pairs, te_y, verbose=1)
-
+    
     info.update(dataset=dataset,
                 samples_per_class=n_samples,
                 loss=loss,
@@ -95,33 +105,37 @@ def run_and_release(dataset, **kwargs):
     return results
 
 
-def main(dataset, n_classes):
+def main(dataset, n_classes, model_name):
 
     if dataset == 'mnist':
         input_shape = (28, 28, 1)
         samples_per_class = [5, 10, 25, 50]  # , 100, 250, 500, 750]
-        kwargs = dict(n_classes=n_classes, input_shape=input_shape)
     elif dataset == 'fiw':
         input_shape = (64, 64, 3)
         samples_per_class = [5, 10, 15, 20, 25, 30, 35, 40]
-        kwargs = dict(n_classes=n_classes,
-                      input_shape=input_shape,
-                      build_if_exists=True)
 
     results = []
     if isinstance(n_classes, int):
         for ics in samples_per_class:
             logging.info(f"starting with ~{ics} samples...")
-            kwargs.update(samples_per_class=ics)
-            res = run_and_release(dataset, **kwargs)
+            res = run_and_release(dataset,
+                                  model_name=model_name,
+                                  n_classes=n_classes,
+                                  input_shape=input_shape,
+                                  samples_per_class=ics)
+                                  
             results.append(res)
             logging.info(f"done with ~{ics} samples.")
             # os.system('clear')
     elif isinstance(n_classes, list):
         for cls in n_classes:
             logging.info(f"starting with ~{cls} classes...")
-            kwargs.update(n_classes=cls, samples_per_class=0)
-            res = run_and_release(dataset, **kwargs)
+            res = run_and_release(dataset,
+                                  model_name=model_name,
+                                  n_classes=cls,
+                                  input_shape=input_shape,
+                                  samples_per_class=0,
+                                  build_if_exists=True)
             results.append(res)
             logging.info(f"done with ~{cls} classes.")
             # os.system('clear')
@@ -133,7 +147,14 @@ if __name__ == '__main__':
     mp.set_start_method('spawn')
 
     dataset = 'fiw'
-    results = main(dataset, n_classes=[3, 6, 10, 100, 200, 470])
+    model = 'vggface'
+    results = main(dataset=dataset,
+                   n_classes=[3, 6, 10, 100, 200, 470],
+                   model_name=model)
     with open('results.pkl', 'wb') as fp:
         pickle.dump(results, fp)
-    visualize_distances(results, dataset)
+
+    # with open('results.pkl', 'rb') as fp:
+    #     results = pickle.load(fp)
+    # logging.info(results)
+    visualize_distances(results, dataset, model)
