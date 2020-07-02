@@ -3,6 +3,7 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+sns.set_style('whitegrid')
 
 def plot_history(history):
     loss, acc, val_loss, val_acc = history.history.keys()
@@ -30,7 +31,6 @@ def imshow(img):
 
 
 def visualize_pairs(pairs, y):
-
     n_pairs = len(pairs)
     _, axarr = plt.subplots(nrows=2,
                             ncols=n_pairs,
@@ -54,14 +54,16 @@ def visualize_distance_distribution(distances, targets, n_classes):
     plt.show()
 
 
-def visualize_distances(results, dataset):
+def visualize_distances(results, dataset, model, save_name='results.png'):
     ncols = 4
     nrows = (len(results) // ncols) + 1
-    _, axs = plt.subplots(nrows,
-                          ncols,
-                          figsize=(20, 20),
-                          squeeze=False,
-                          )
+    _, axs = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(15, 8),
+        squeeze=False,
+        constrained_layout=True
+    )
 
     for i, result in enumerate(results):
         distances, targets, info = result
@@ -69,18 +71,39 @@ def visualize_distances(results, dataset):
             info['samples_per_class'], info['n_individuals'],
             info['n_families'], info['loss'], info['acc'])
         ax = axs[i // ncols][i % ncols]
-        for c in range(2):
-            sns.kdeplot(distances[targets == c], label=str(c), ax=ax)
-            ax.annotate(f"Families: {n_classes}", xy=(-0.4, 6.5))
-            ax.annotate(f"Individuals: {n_individuals}", xy=(-0.4, 6.0))
-            ax.annotate(f"Samples per class: ~{n_samples}", xy=(-0.4, 5.5))
-            ax.annotate(f"Loss: {loss:.2f}, Acc: {acc:.2f}", xy=(-0.4, 5.0))
-            ax.set_xlim((-0.5, 2))
-            ax.set_ylim((0, 7))
-            ax.set_title(i)
+        ylim = 0
+        annotations = (f"Families: {n_classes}\n"
+                       f"Individuals: {n_individuals}\n"
+                       f"Samples per class: ~{n_samples:.2f}\n"
+                       f"Loss: {loss:.2f}, Acc: {acc:.2f}")
 
-    plt.suptitle(f"{dataset}: siamese net distances")
-    plt.show()
+        for c in range(2):
+            try:
+                sns.distplot(distances[targets == c],
+                             kde=True,
+                             label=str(c),
+                             ax=ax)
+            except (ValueError, RuntimeError):
+                pass
+
+            if c == 1:
+                _, ylim_ = ax.get_ylim()
+                if ylim_ > ylim:
+                    ylim = ylim_
+
+                y = ylim - (0.15 * ylim)
+                ax.annotate(annotations, xy=(-0.9, y), fontsize='x-small')
+
+            _, ylim = ax.get_ylim()
+
+        ax.set_xlim((-1, 2))
+        ax.set_title(i)
+
+    plt.suptitle(f"{dataset}: {model} net distances")
+    if save_name:
+        plt.savefig(save_name, dpi=300)
+    else:
+        plt.show()
 
 
 def plot_augmented_pairs(datagen, pairs):
@@ -91,7 +114,6 @@ def plot_augmented_pairs(datagen, pairs):
     datagen : ImageDataGenerator
     pairs : pandas.DataFrame
     """
-    pass
     # pairs['target'] = pairs.target.astype(str)
     # data_gen_args = dict(featurewise_center=True,
     #                      featurewise_std_normalization=True,
@@ -109,6 +131,7 @@ def plot_augmented_pairs(datagen, pairs):
     #     seed=42,
     #     data_gen_args=data_gen_args,
     # )
+    pass
 
 
 def visualize(original, augmented):
