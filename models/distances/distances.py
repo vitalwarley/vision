@@ -1,16 +1,17 @@
 from keras import backend as K
 
 
-def eucl_dist_output_shape(shapes):
-    """Utility for `euclidean_distance`.
+def get_output_shape(shapes):
+    """Utility for `euclidean_distance` and the like.
 
     When one uses `euclidean_distance` with `keras.layers.Lambda`,
-    it is needed to set `output_shape=eucl_dist_output_shape`.
+    it is needed to set `output_shape=get_output_shape`.
 
     Parameters
     ----------
     shapes : tuple
-        It contains two tuples, one for each vector passed to `euclidean_distance`.
+        It contains two tuples, 
+        one for each vector passed to `euclidean_distance`.
 
     Returns
     -------
