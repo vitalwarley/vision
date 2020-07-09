@@ -12,14 +12,14 @@ def create_base_siamese(input_shape=None, **kwargs):
     """
     inputs = layers.Input(shape=input_shape)
     out = layers.Conv2D(64, 10, activation='relu')(inputs)
-    out = layers.MaxPooling2D()(out)
-    out = layers.Conv2D(128, 7, activation='relu')(out)
-    out = layers.MaxPool2D()(out)
+    out = layers.MaxPooling2D(4)(out)
+    # out = layers.Conv2D(128, 7, activation='relu')(out)
+    # out = layers.MaxPool2D()(out)
     # x = layers.Conv2D(128, 4, activation='relu')(x)
     # x = layers.MaxPool2D()(x)
     # x = layers.Conv2D(256, 4, activation='relu')(x)
     out = layers.Flatten()(out)
-    embeddings = layers.Dense(4096, activation='sigmoid')(out)
+    embeddings = layers.Dense(128, activation='sigmoid')(out)
     model = models.Model(inputs=inputs, outputs=embeddings)
     return model
 

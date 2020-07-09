@@ -16,24 +16,103 @@ from tensorflow.keras.preprocessing.image import img_to_array, load_img
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
+FOLDER = "/home/lativ/dev/vision/kaggle/rfiw"
 
-def load(n_classes=0,
-         samples_per_class=0,
-         gap=5,
-         input_shape=(64, 64, 3),
-         s='train',
-         return_np=True,
-         build_if_exists=False,
-         **kwargs):
-    # pylint: disable=unused-argument
+def load(
+    # pylint: disable=bad-continuation
+    n_classes=0,
+    samples_per_class=0,
+    gap=5,
+    input_shape=(64, 64, 3),
+    s="train",
+    return_np=True,
+    build_if_exists=False,
+    just_save=False,
+    **kwargs,  # pylint: disable=unused-argument
+):
     """Returns an array of pairs and labels or a train and validation dataset.
     """
-    data = 'data'
-    relations_file = os.path.join(data, 'train_relationships.csv')
-    relations = pd.read_csv(relations_file)
+    data = os.path.join(FOLDER, 'data')
+    relations = os.path.join(data, "train_relationships.csv")
+    relations = pd.read_csv(relations)
     folder = os.path.join(data, s)
 
+    families = _select_families(folder, n_classes, samples_per_class, gap)
+
+    # FIDX|FIDY|FIDZ|...
+    fams = "|".join(families)
+
+    # Only those pairs within `families`
+    relations = relations[
+        relations.p1.str.contains(fams) & relations.p2.str.contains(fams)
+    ]
+
+    logging.info("Will buid pairs if exists? %s", build_if_exists)
+    filename = f"pairs_{n_classes}_{samples_per_class}_{gap}.csv"
+
+    pairs_path = os.path.join(data, filename)
+    if os.path.exists(pairs_path) and not build_if_exists:
+        pairs = pd.read_csv(pairs_path)
+    else:
+        logging.info("Building pairs relation...")
+        try:
+            pairs = build_pairs_relation(folder, relations, from_families=families)
+        except (RuntimeError, ValueError, KeyError):
+            # Couldn't build it
+            return None
+        pairs.to_csv(pairs_path, index=False)
+
+    filename = f"image_pairs_{n_classes}_{samples_per_class}_{gap}_{input_shape}.npz"
+    pairs_path = os.path.join(data, filename)
+    if os.path.exists(pairs_path) and not build_if_exists:
+        loaded = np.load(pairs_path)
+        pairs, y = loaded["pairs"], loaded["y"]
+    else:
+        logging.info("Building pairs image path...")
+        pairs = build_pairs_path(folder, pairs)
+        pairs.to_csv(pairs_path, index=False)
+        logging.info("Loading pairs images...")
+        pairs, y = load_imgs(pairs, target_size=input_shape)
+        np.savez_compressed(pairs_path, pairs=pairs, y=y)
+
+    if just_save:
+        return None
+
+    # Build info
+    n_families = len(families)
+    n_individuals_per_family = [len(os.listdir(f"{folder}/{fam}")) for fam in families]
+    samples_per_class = np.mean(n_individuals_per_family)
+    n_individuals = sum(n_individuals_per_family)
+    info = dict(
+        n_families=n_families,
+        n_individuals=n_individuals,
+        samples_per_class=samples_per_class,
+    )
+
+    logging.info(
+        "%s individuals selected for %s families. " "~%s samples per class.",
+        n_individuals,
+        n_families,
+        round(samples_per_class, 2),
+    )
+
+    if return_np:
+        x_train, x_test, y_train, y_test = train_test_split(pairs, y, test_size=0.2)
+        return ((x_train, y_train), (x_test, y_test)), info
+
+    return build_datasets(pairs, y)
+
+
+def _select_families(folder, n_classes, samples_per_class, gap):
+    """Select families.
+
+    Returns
+    -------
+    families : list
+        list of families as string ids like FID0001.
+    """
     families = os.listdir(folder)
+    n_classes = n_classes if n_classes > 0 else len(families)
     n_individuals_families = defaultdict(list)
 
     # dict(n_individuals : [families_with_n_individuals...])
@@ -43,9 +122,11 @@ def load(n_classes=0,
 
     # Use all samples instead
     if not samples_per_class:
-        fams = sorted(n_individuals_families,
-                      key=lambda x: len(n_individuals_families[x]),
-                      reverse=True)
+        fams = sorted(
+            n_individuals_families,
+            key=lambda x: len(n_individuals_families[x]),
+            reverse=True,
+        )
         # Select most populated families
         families = [n_individuals_families[key] for key in fams]
         families = [fam for sublist in families for fam in sublist]
@@ -57,23 +138,22 @@ def load(n_classes=0,
                 families.append(n_individuals_families[n_ind])
         # Select a few
         if len(families) >= n_classes:
-            families = np.random.choice(families,
-                                        size=n_classes,
-                                        replace=False)
+            families = np.random.choice(families, size=n_classes, replace=False)
         # Not enough families,
         #  then add more families:
         #   start from those with the similar number of individuals
         else:
-            # list(n_individuals...) <- families with more n_individuals)
+            # list(n_individuals...) <- families with more n_individuals
             #  in decreasing order
-            fams = sorted(n_individuals_families,
-                          key=lambda x: len(n_individuals_families[x]),
-                          reverse=True)
+            fams = sorted(
+                n_individuals_families,
+                key=lambda x: len(n_individuals_families[x]),
+                reverse=True,
+            )
             # pivot similar families index (wrt to n_individuals_families)
             while len(families) < n_classes or not fams:
                 # Index of most similar fams (in terms of n_individuals)
-                pivot = np.argmin(
-                    np.abs(np.array(fams.keys()) - samples_per_class))
+                pivot = np.argmin(np.abs(np.array(fams.keys()) - samples_per_class))
                 key = fams.pop(pivot)
                 # Most similar fams
                 fams_to_add = n_individuals_families[key]
@@ -84,62 +164,7 @@ def load(n_classes=0,
                 fams_to_add = np.random.choice(fams_to_add, size=will_add)
                 families.append(fams_to_add)
 
-    # FIDX|FIDY|FIDZ|...
-    fams = '|'.join(families)
-
-    # Only those pairs within `families`
-    relations = relations[relations.p1.str.contains(fams)
-                          & relations.p2.str.contains(fams)]
-
-    if os.path.exists('pairs.csv') and not build_if_exists:
-        pairs = pd.read_csv('pairs.csv')
-    else:
-        logging.info('Building pairs relation...')
-        try:
-            pairs = build_pairs_relation(folder,
-                                         relations,
-                                         from_families=families)
-        except (RuntimeError, ValueError, KeyError):
-            # Couldn't build it
-            return None
-        pairs.to_csv('pairs.csv', index=False)
-
-    if os.path.exists('image_pairs.npz') and not build_if_exists:
-        loaded = np.load('image_pairs.npz')
-        pairs, y = loaded['pairs'], loaded['y']
-    else:
-        logging.info('Building pairs image path...')
-        pairs = build_pairs_path(folder, pairs)
-        pairs.to_csv('pairs_path.csv', index=False)
-        logging.info('Loading pairs images...')
-        pairs, y = load_imgs(pairs, target_size=input_shape)
-        np.savez_compressed('image_pairs', pairs=pairs, y=y)
-
-    # Build info
-    n_families = len(families)
-    n_individuals_per_family = [
-        len(os.listdir(f"{folder}/{fam}")) for fam in families
-    ]
-    samples_per_class = np.mean(n_individuals_per_family)
-    n_individuals = sum(n_individuals_per_family)
-    info = dict(n_families=n_families,
-                n_individuals=n_individuals,
-                samples_per_class=samples_per_class)
-
-    logging.info(
-        "%s individuals selected for %s families. "
-        "~%s samples per class.", n_individuals, n_families,
-        round(samples_per_class, 2))
-
-    if return_np:
-        x_train, x_test, y_train, y_test = train_test_split(pairs,
-                                                            y,
-                                                            test_size=0.2)
-        return ((x_train, y_train), (x_test, y_test)), info
-
-    train_dataset, val_dataset = build_datasets(pairs, y)
-
-    return train_dataset, val_dataset
+    return families
 
 
 def build_pairs_relation(train_folder, relations, from_families):
@@ -154,45 +179,45 @@ def build_pairs_relation(train_folder, relations, from_families):
         Each individual is represented by FIDX/MIDY,
         where X is the family ID and Y is the individual ID.
     from_families : ndarray
-        
+
     Returns
     -------
     pairs : pandas.DataFrame
         A DataFrame with pairs already in `relations` as well as
         negative pairs.
     """
-
     # Build list with all individuals
     individuals = []
     for family in tqdm(from_families, total=len(from_families)):
         for person in os.listdir(os.path.join(train_folder, family)):
-            individuals.append(family + '/' + person)
+            individuals.append(family + "/" + person)
 
     # Build a dataframe with all possible pairs of individuals
     possible_pairs = list(combinations(individuals, 2))
-    possible_pairs = pd.DataFrame(possible_pairs, columns=['p1', 'p2'])
+    possible_pairs = pd.DataFrame(possible_pairs, columns=["p1", "p2"])
 
     # Filter same family pairs (some are negative, some are positive)
     # Positive pairs are in `relations`; we don't need the negatives there (?)
     nequal_fams = (
-        possible_pairs.p1.str.split('/', expand=True)[0]  # get fid
-        != possible_pairs.p2.str.split('/', expand=True)[0])
+        possible_pairs.p1.str.split("/", expand=True)[0]  # get fid
+        != possible_pairs.p2.str.split("/", expand=True)[0]
+    )
     negative_pairs = possible_pairs[nequal_fams]
 
     # Filter negatives to balance dataset
     n_positives = len(relations)
     # Sample some negatives...
-    selected_negs_index = np.random.choice(negative_pairs.index,
-                                           size=n_positives,
-                                           replace=False)
+    selected_negs_index = np.random.choice(
+        negative_pairs.index, size=n_positives, replace=False
+    )
 
     negative_pairs = negative_pairs.loc[selected_negs_index, :]
 
-    negative_pairs['target'] = 0
-    relations['target'] = 1
+    negative_pairs["target"] = 0
+    relations["target"] = 1
     pairs = relations.append(negative_pairs, ignore_index=True)
 
-    logging.info('%s pairs selected.', pairs.shape[0])
+    logging.info("%s pairs selected.", pairs.shape[0])
 
     return pairs
 
@@ -218,7 +243,7 @@ def build_pairs_path(train_folder, pairs):
 
     def sample_img(train_folder, mid):
         folder = Path(train_folder) / mid
-        path_imgs = list(folder.glob('*.jpg'))
+        path_imgs = list(folder.glob("*.jpg"))
         selected = None
         if path_imgs:
             selected = np.random.choice(path_imgs, size=1)[0]
@@ -229,11 +254,12 @@ def build_pairs_path(train_folder, pairs):
         mid2_img_path = sample_img(train_folder, row.p2)
         if mid1_img_path and mid2_img_path:
             pairs_path.append(
-                dict(p1=str(mid1_img_path),
-                     p2=str(mid2_img_path),
-                     target=str(row.target)))
+                dict(
+                    p1=str(mid1_img_path), p2=str(mid2_img_path), target=str(row.target)
+                )
+            )
 
-    pairs_path = pd.DataFrame(pairs_path, columns=['p1', 'p2', 'target'])
+    pairs_path = pd.DataFrame(pairs_path, columns=["p1", "p2", "target"])
 
     return pairs_path
 
@@ -263,32 +289,23 @@ def generate(x, y, batch_size):
     for batch_idx in range(n_batches):
         batch_start = batch_idx * batch_size
         batch_end = (1 + batch_idx) * batch_size
-        x_batch = [
-            x[batch_start:batch_end, 0, ...], x[batch_start:batch_end, 1, ...]
-        ]
+        x_batch = [x[batch_start:batch_end, 0, ...], x[batch_start:batch_end, 1, ...]]
         y_batch = y[batch_start:batch_end]
         yield x_batch, y_batch
 
 
 def build_datasets(pairs, y):
     """Return a `tf.data.Dataset` for training and validation."""
-    x_train, x_val, y_train, y_val = train_test_split(pairs,
-                                                      y,
-                                                      test_size=0.2,
-                                                      random_state=42)
+    x_train, x_val, y_train, y_val = train_test_split(
+        pairs, y, test_size=0.2, random_state=42
+    )
 
     train_dataset = tf.data.Dataset.from_tensor_slices(
-        ((x_train[:, 0, ...], x_train[:, 1, ...]), y_train))
+        ((x_train[:, 0, ...], x_train[:, 1, ...]), y_train)
+    )
     val_dataset = tf.data.Dataset.from_tensor_slices(
-        ((x_val[:, 0, ...], x_val[:, 1, ...]), y_val))
-
-    # repetitions = 1
-    # train_dataset = (
-    #     train_dataset.shuffle(100).batch(batch_size).repeat(repetitions)
-    # )
-    # val_dataset = (
-    #     val_dataset.shuffle(100).batch(batch_size).repeat(repetitions)
-    # )
+        ((x_val[:, 0, ...], x_val[:, 1, ...]), y_val)
+    )
 
     return train_dataset, val_dataset
 
@@ -315,12 +332,7 @@ def augment(pair, label):
 
 
 def make_pair_input(
-    pairs_path,
-    cols,
-    input_shape,
-    batch_size,
-    seed=None,
-    data_gen_args=None,
+    pairs_path, cols, input_shape, batch_size, seed=None, data_gen_args=None,
 ):
     target_size = (input_shape[0], input_shape[1])
     seed = 42 if seed is None else seed
@@ -328,12 +340,12 @@ def make_pair_input(
     datagen_p1 = ImageDataGenerator(**data_gen_args)
     datagen_p2 = ImageDataGenerator(**data_gen_args)
 
-    if os.path.exists('image_pairs.npz'):
-        loaded = np.load('image_pairs.npz')
-        pairs, y = loaded['pairs'], loaded['y']
+    if os.path.exists("image_pairs.npz"):
+        loaded = np.load("image_pairs.npz")
+        pairs, y = loaded["pairs"], loaded["y"]
     else:
         pairs, y = load_imgs(pairs, target_size=input_shape)
-        np.savez_compressed('image_pairs', pairs=pairs, y=y)
+        np.savez_compressed("image_pairs", pairs=pairs, y=y)
 
     datagen_p1.fit(pairs.reshape((-1, *input_shape)), augment=True, seed=seed)
     datagen_p2.fit(pairs.reshape((-1, *input_shape)), augment=True, seed=seed)
@@ -345,10 +357,10 @@ def make_pair_input(
         directory=None,
         x_col=cols[0],
         y_col=cols[2],
-        class_mode='binary',
+        class_mode="binary",
         seed=seed,
-        save_to_dir='data/augmented',
-        subset='training',
+        save_to_dir="data/augmented",
+        subset="training",
         validate_filenames=False,
     )
 
@@ -356,13 +368,13 @@ def make_pair_input(
 
     gen_p1_train = datagen_p1.flow_from_dataframe(**flow_fd_args_train)
 
-    flow_fd_args_train['x_col'] = cols[1]
+    flow_fd_args_train["x_col"] = cols[1]
     gen_p2_train = datagen_p2.flow_from_dataframe(**flow_fd_args_train)
 
-    flow_fd_args_val['subset'] = 'validation'
+    flow_fd_args_val["subset"] = "validation"
     gen_p1_val = datagen_p1.flow_from_dataframe(**flow_fd_args_val)
 
-    flow_fd_args_val['x_col'] = cols[1]
+    flow_fd_args_val["x_col"] = cols[1]
     gen_p2_val = datagen_p2.flow_from_dataframe(**flow_fd_args_val)
 
     train_sequence = PairInputSequence((gen_p1_train, gen_p2_train))

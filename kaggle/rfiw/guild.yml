@@ -1,0 +1,25 @@
+- model: rfiw
+  description: kinship verification in the wild
+  operations:
+    train:
+        main: train
+        flags:
+            model_name:
+                description: Model used to train
+            input_shape:
+                description: Model input shape
+            batch_size: 
+                description: Training batch size
+            epochs:
+                description: Number of epochs to train
+            n_classes:
+                description: Number of families used to train
+            samples_per_class:
+                description: Number of individuals per family
+        output-scalars:
+            loss: 'loss: (\value)'
+            val_loss: 'val_loss: (\value)'
+            accuracy: 'accuracy.*: (\value)'
+            val_accuracy: 'val_accuracy.*: (\value)'
+            trainable_parameters: 'parameters \(trainable\): (\value)'
+            non_trainable_parameters: 'parameters \(non-trainable\): (\value)'
